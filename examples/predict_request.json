@@ -1,0 +1,17 @@
+{
+  "instances": [
+    {
+      "tenure": 2,
+      "MonthlyCharges": 95.5,
+      "TotalCharges": 191.0,
+      "SeniorCitizen": 0,
+      "Contract": "Month-to-month",
+      "InternetService": "Fiber optic",
+      "PaymentMethod": "Electronic check",
+      "TechSupport": "No",
+      "OnlineSecurity": "No",
+      "PaperlessBilling": "Yes"
+    }
+  ]
+}
+
