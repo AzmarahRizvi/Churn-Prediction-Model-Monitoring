@@ -12,7 +12,6 @@ from urllib.parse import urlparse
 import joblib
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 
 from churn_monitoring.data import validate_feature_frame
@@ -59,17 +58,11 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Churn Prediction API", version="0.1.0", lifespan=lifespan)
-UI_PATH = Path(__file__).parent / "static" / "index.html"
 
 
 class PredictRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     instances: list[dict[str, Any]]
-
-
-@app.get("/", include_in_schema=False)
-def home() -> FileResponse:
-    return FileResponse(UI_PATH)
 
 
 @app.get("/health")

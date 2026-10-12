@@ -16,11 +16,12 @@ In short, the pipeline is:
 
 ```text
 Synthetic training data -> XGBoost + preprocessing -> model.joblib + metrics + baseline CSV
-FastAPI + model.joblib -> Docker -> Artifact Registry -> Vertex AI Endpoint
-                                                       -> online prediction logs
-                                                       -> Vertex Model Monitoring v1
-                                                       -> email + Cloud Logging alert
-Traffic simulator -> 30 virtual days of baseline or shifting inputs -> Endpoint
+Browser -> Streamlit UI -> FastAPI local API -> model.joblib
+FastAPI Docker image -> Artifact Registry -> Vertex AI Endpoint
+                                             -> online prediction logs
+                                             -> Vertex Model Monitoring v1
+                                             -> email + Cloud Logging alert
+Traffic simulator -> 30 virtual days of baseline or shifting inputs -> Vertex AI Endpoint
 ```
 
 Vertex Model Monitoring v1 is used because it is the generally available endpoint monitoring workflow. Drift mode compares production input distributions over time; training-serving skew is a separate mode that requires the training dataset. The monitoring schedule supports a minimum one-hour interval, so the simulator compresses 30 virtual days into a burst by default. Its optional sleep setting can spread requests over real elapsed time.
@@ -43,15 +44,17 @@ flowchart LR
         Docker[FastAPI Docker image]
         Registry[Artifact Registry]
         Bucket[Cloud Storage model artifact]
-        Endpoint[Vertex AI Endpoint]
+        VertexEndpoint[Vertex AI Endpoint]
         Docker --> Registry
         Artifact --> Bucket
-        Registry --> Endpoint
-        Bucket --> Endpoint
+        Registry --> VertexEndpoint
+        Bucket --> VertexEndpoint
     end
 
-Client[Browser UI or API client] -->|customer features| Endpoint
-Endpoint -->|churn probability + prediction| Client
+    Browser[Browser] --> Streamlit[Streamlit UI]
+    Streamlit -->|POST /predict locally| FastAPI[FastAPI prediction service]
+    FastAPI -->|churn probability + prediction| Streamlit
+    FastAPI --> Docker
 
     subgraph Monitor[Traffic simulation and monitoring]
         Simulator[Traffic simulator<br/>baseline then drifting month]
@@ -59,8 +62,8 @@ Endpoint -->|churn probability + prediction| Client
         Baseline[Recent production baseline]
         ModelMonitor[Vertex AI Model Monitoring<br/>feature thresholds, hourly checks]
         Alert[Email + Cloud Logging anomaly]
-        Simulator -->|virtual-day feature batches| Endpoint
-        Endpoint --> Logs
+        Simulator -->|virtual-day feature batches| VertexEndpoint
+        VertexEndpoint --> Logs
         Logs --> ModelMonitor
         Logs --> Baseline
         Baseline --> ModelMonitor
@@ -78,7 +81,7 @@ src/churn_monitoring/
   schema.py               Shared feature contract
   train.py                Fit model and write metrics/artifacts
   serve.py                FastAPI Vertex-compatible prediction server
-  static/index.html       Browser form for local and container predictions
+  streamlit_app.py        Python browser interface for the prediction API
   simulate_traffic.py     Send virtual-month traffic to an endpoint
 scripts/
   deploy_vertex.ps1       Build, push, upload, and deploy
@@ -94,23 +97,34 @@ Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/getting-started/install
 
 ```powershell
 $env:UV_PROJECT_ENVIRONMENT = ".venv-churn-monitoring"
-uv sync --python 3.11
-uv run python -m churn_monitoring.train --rows 8000 --seed 42
+uv sync --extra ui --python 3.11
+uv run --extra ui python -m churn_monitoring.train --rows 8000 --seed 42
 ```
 
-This sets uv's project environment directory to `.venv-churn-monitoring`; `uv sync` creates it if needed, resolves the dependencies, and creates `uv.lock` on the first run. Commit `uv.lock` so future syncs use the same resolved versions. The environment variable applies to the current PowerShell session, so set it again in each new terminal before running `uv sync` or `uv run`. You can activate it with `.\.venv-churn-monitoring\Scripts\Activate.ps1`, or use `uv run` as above without activating.
+This sets uv's project environment directory to `.venv-churn-monitoring`; `uv sync --extra ui` installs the optional Streamlit interface along with the API dependencies. The Vertex inference Docker image installs only the base dependencies. `uv sync` creates the environment if needed and uses the checked-in `uv.lock`. The environment variable applies to the current PowerShell session, so set it again in each new terminal before running `uv sync` or `uv run`. You can activate it with `.\.venv-churn-monitoring\Scripts\Activate.ps1`, or use `uv run` as above without activating.
 
 The command creates `artifacts/model/model.joblib` (preprocessing plus classifier), `artifacts/training_baseline.csv` (training rows including `Churn`), and `artifacts/metrics.json` (holdout ROC AUC, accuracy, precision, recall, F1, and counts).
 
-## Run the API locally
+## Run the UI and API locally
+
+Start FastAPI in one PowerShell terminal:
 
 ```powershell
 $env:UV_PROJECT_ENVIRONMENT = ".venv-churn-monitoring"
 $env:MODEL_PATH = "artifacts/model/model.joblib"
-uv run uvicorn churn_monitoring.serve:app --host 127.0.0.1 --port 8080
+uv run --extra ui uvicorn churn_monitoring.serve:app --host 127.0.0.1 --port 8080
 ```
 
-Open [http://127.0.0.1:8080](http://127.0.0.1:8080) for the browser interface. Enter customer details and select **Predict churn risk** to see the score and prediction. The interface sends requests to the same `POST /predict` API used by the deployment. FastAPI's interactive API page remains at [http://127.0.0.1:8080/docs](http://127.0.0.1:8080/docs), ReDoc is at [http://127.0.0.1:8080/redoc](http://127.0.0.1:8080/redoc), and the health check is at [http://127.0.0.1:8080/health](http://127.0.0.1:8080/health).
+Run the Streamlit UI in a second terminal:
+
+```powershell
+$env:UV_PROJECT_ENVIRONMENT = ".venv-churn-monitoring"
+uv run --extra ui streamlit run src/churn_monitoring/streamlit_app.py --server.address 127.0.0.1 --server.port 8501
+```
+
+Open [http://127.0.0.1:8501](http://127.0.0.1:8501) and enter customer details to see a churn score. Streamlit sends the request to FastAPI at `http://127.0.0.1:8080`; set `CHURN_API_BASE_URL` if the API runs at a different address. FastAPI's interactive API page remains at [http://127.0.0.1:8080/docs](http://127.0.0.1:8080/docs), ReDoc is at [http://127.0.0.1:8080/redoc](http://127.0.0.1:8080/redoc), and its health check is at [http://127.0.0.1:8080/health](http://127.0.0.1:8080/health).
+
+The Vertex deployment script deploys the FastAPI prediction service. The Streamlit app is a separate UI process and currently calls a FastAPI HTTP URL. Deploying the UI to Cloud Run is a separate step; to connect it to Vertex AI, configure server-side Google credentials and send authenticated prediction requests from the Streamlit process.
 
 In another terminal:
 
@@ -157,7 +171,7 @@ First send a baseline month:
 
 ```powershell
 $env:UV_PROJECT_ENVIRONMENT = ".venv-churn-monitoring"
-uv run python -m churn_monitoring.simulate_traffic `
+uv run --extra ui python -m churn_monitoring.simulate_traffic `
   --project YOUR_PROJECT_ID --region us-central1 --endpoint-id YOUR_ENDPOINT_ID `
   --phase baseline
 ```
@@ -166,7 +180,7 @@ Let one scheduled monitoring interval complete with baseline traffic. Then send 
 
 ```powershell
 $env:UV_PROJECT_ENVIRONMENT = ".venv-churn-monitoring"
-uv run python -m churn_monitoring.simulate_traffic `
+uv run --extra ui python -m churn_monitoring.simulate_traffic `
   --project YOUR_PROJECT_ID --region us-central1 --endpoint-id YOUR_ENDPOINT_ID `
   --phase drift
 ```

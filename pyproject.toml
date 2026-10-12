@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "churn-prediction-model-monitoring"
 version = "0.1.0"
-description = "End-to-end churn prediction, FastAPI serving, and Vertex AI drift monitoring."
+description = "Churn prediction with a Streamlit UI, FastAPI serving, and Vertex AI drift monitoring."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -20,11 +20,11 @@ dependencies = [
   "google-cloud-aiplatform>=1.49",
 ]
 
+[project.optional-dependencies]
+ui = ["streamlit>=1.38"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.package-data]
-churn_monitoring = ["static/*.html"]
 
 [tool.ruff]
 line-length = 100
